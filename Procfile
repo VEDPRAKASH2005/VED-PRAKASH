@@ -1,0 +1,1 @@
+web: gunicorn chamki_bhukhar_major:app
