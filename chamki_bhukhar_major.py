@@ -133,9 +133,36 @@ MODELS = {
         ("clf",    SVC(probability=True, class_weight="balanced", random_state=42))])
 }
 
-results_cache = {}          # model_name → metrics dict
+results_cache   = {}
 best_model_name = None
 best_model_obj  = None
+
+CACHE_PATH = os.path.join(MODEL_DIR, "results_cache.json")
+BEST_PATH  = os.path.join(MODEL_DIR, "best_model_name.txt")
+
+
+def all_models_saved():
+    """Check karo sabhi model files already saved hain ya nahi"""
+    for name in MODELS:
+        path = os.path.join(MODEL_DIR, f"{name.replace(' ','_')}.pkl")
+        if not os.path.exists(path):
+            return False
+    return (os.path.exists(CACHE_PATH) and
+            os.path.exists(BEST_PATH) and
+            os.path.exists(os.path.join(MODEL_DIR, "feature_importance.pkl")))
+
+
+def load_saved_models():
+    """Saved models aur metrics ko load karo — fast!"""
+    global best_model_name, best_model_obj, results_cache, MODELS
+    print("[⚡] Saved models found — loading from disk (fast mode)...")
+    with open(CACHE_PATH)  as f: results_cache   = json.load(f)
+    with open(BEST_PATH)   as f: best_model_name = f.read().strip()
+    for name in list(MODELS.keys()):
+        path = os.path.join(MODEL_DIR, f"{name.replace(' ','_')}.pkl")
+        MODELS[name] = joblib.load(path)
+    best_model_obj = MODELS[best_model_name]
+    print(f"[✓] All models loaded! Best: {best_model_name}")
 
 
 def train_all_models(df):
@@ -170,7 +197,6 @@ def train_all_models(df):
         }
         results_cache[name] = metrics
         print(f"  {name:25s} | Acc={metrics['accuracy']}% | AUC={metrics['roc_auc']}%")
-
         joblib.dump(model, os.path.join(MODEL_DIR, f"{name.replace(' ','_')}.pkl"))
 
         if metrics["roc_auc"] > best_auc:
@@ -178,11 +204,16 @@ def train_all_models(df):
             best_model_name = name
             best_model_obj  = model
 
-    # Feature importance (Random Forest)
     rf = MODELS["Random Forest"]
     fi = dict(zip(FEATURE_COLS, rf.feature_importances_))
     joblib.dump(fi, os.path.join(MODEL_DIR, "feature_importance.pkl"))
+
+    # Save metrics + best model name to disk
+    with open(CACHE_PATH, "w") as f: json.dump(results_cache, f)
+    with open(BEST_PATH,  "w") as f: f.write(best_model_name)
+
     print(f"\n[★] Best model: {best_model_name} (AUC={best_auc}%)")
+    print("[💾] Models saved — next restart hoga fast! ⚡")
     return results_cache
 
 
@@ -928,7 +959,10 @@ def api_history_clear():
 # ─────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────
-if __name__ == "__main__":
+# ─────────────────────────────────────────────
+# STARTUP — runs on gunicorn too (not just __main__)
+# ─────────────────────────────────────────────
+def startup():
     print("=" * 60)
     print("  CHAMKI BHUKHAR PREDICTION SYSTEM — MAJOR PROJECT")
     print("  Govt. Polytechnic Motihari | CSE Dept.")
@@ -939,12 +973,23 @@ if __name__ == "__main__":
         df = generate_dataset(n=1200)
     else:
         df = pd.read_csv(DATA_PATH)
-        print(f"[✓] Dataset loaded: {len(df)} rows from {DATA_PATH}")
+        print(f"[✓] Dataset loaded: {len(df)} rows")
 
-    # Step 2 — Train all models
-    train_all_models(df)
+    # Step 2 — Load OR Train models
+    if all_models_saved():
+        load_saved_models()          # ⚡ Fast — already trained!
+    else:
+        print("[🔁] First time — training all models (one time only)...")
+        train_all_models(df)         # 🐢 Slow — only first time
 
-    # Step 3 — Launch Flask
-    print("\n[🌐] Starting Web App → http://localhost:5000")
+    print("\n[✓] System ready!\n")
+
+
+# Run startup when app loads (works with gunicorn too)
+startup()
+
+
+if __name__ == "__main__":
+    print("[🌐] Starting Web App → http://localhost:5000")
     print("[ℹ]  Ctrl+C se band karo\n")
     app.run(debug=False, host="0.0.0.0", port=5000)
